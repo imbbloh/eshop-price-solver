@@ -217,13 +217,12 @@ const REGIONS = {
   },
 };
 const CAP=980, EPS=0.0001, WANT=5, MAX_LEN=15;
-// Fallback facets to split a price window when more titles share that price
-// than a single Algolia query can return (hard cap: 1000/query) — see
-// harvestCollision below. softwareDeveloper alone isn't enough: a single
-// $4.99 window can have 1000+ distinct developers, exceeding Algolia's
-// maxValuesPerFacet:1000 and truncating the facet enumeration itself.
-// softwarePublisher is far more concentrated, so it's tried first.
-const SPLIT_ATTRS=['softwarePublisher','softwareDeveloper'];
+// Max titles kept per unique price point — see harvest() below. US/CA in
+// particular have far denser catalogs than BR and routinely blow past
+// Algolia's 1000-hit-per-query cap at common price points like $4.99
+// (3000+ titles); recovering all of them isn't worth the extra queries, so
+// oversaturated price points are just sampled instead.
+const PER_PRICE_CAP=10;
 
 /* ============================ state ============================ */
 let current='br';
@@ -245,44 +244,20 @@ const rangeNF=(r,lo,hi)=>[r.priceKey+'>='+lo,r.priceKey+'<'+hi];
 const facetOf=(r,f)=>f?r.facetKey+':"'+f+'"':undefined;
 async function count(r,lo,hi,f){return (await query(r,{numericFilters:rangeNF(r,lo,hi),filters:facetOf(r,f),hitsPerPage:0})).nbHits;}
 
-async function fetchWindow(r,filters,lo,hi,db,tag){
-  const j=await query(r,{numericFilters:rangeNF(r,lo,hi),filters,hitsPerPage:1000,page:0,attributesToRetrieve:['title','url','price','objectID']});
+async function fetchWindow(r,filters,lo,hi,db,tag,hitsPerPage){
+  const j=await query(r,{numericFilters:rangeNF(r,lo,hi),filters,hitsPerPage,page:0,attributesToRetrieve:['title','url','price','objectID']});
+  const perPrice={};
   for(const h of j.hits){
     const reg=r.getPrice(h);
     if(h.objectID==null||reg==null||reg<=0||reg>r.maxPrice) continue;
+    const key=reg.toFixed(2);
+    perPrice[key]=(perPrice[key]||0)+1;
+    if(perPrice[key]>PER_PRICE_CAP) continue;
     const cur=db[h.objectID]||{title:h.title,price:Math.round(reg*100),url:r.origin+(h.url||''),filters:[]};
     if(!cur.filters.includes(tag)) cur.filters.push(tag);
     db[h.objectID]=cur;
   }
   return j.hits.length;
-}
-// Called when a price window can't be narrowed any further yet still matches
-// >= CAP titles (more titles share that price than one query can return).
-// Try splitting by each attribute in SPLIT_ATTRS (each independently, unioned
-// by objectID) until every valid title in the window has been recovered.
-async function harvestCollision(r,facet,tag,db,lo,hi,total){
-  const base=facetOf(r,facet);
-  const seen=new Set();
-  for(const attr of SPLIT_ATTRS){
-    const fj=await query(r,{numericFilters:rangeNF(r,lo,hi),filters:base,hitsPerPage:0,facets:[attr],maxValuesPerFacet:1000});
-    const values=Object.keys((fj.facets&&fj.facets[attr])||{});
-    for(const v of values){
-      if(CANCEL_FETCH) throw new Error('cancelled');
-      const esc=v.replace(/"/g,'\\"');
-      const filters=base?`${base} AND ${attr}:"${esc}"`:`${attr}:"${esc}"`;
-      const j=await query(r,{numericFilters:rangeNF(r,lo,hi),filters,hitsPerPage:1000,page:0,attributesToRetrieve:['title','url','price','objectID']});
-      for(const h of j.hits){
-        const reg=r.getPrice(h);
-        if(h.objectID==null||reg==null||reg<=0||reg>r.maxPrice) continue;
-        seen.add(h.objectID);
-        const cur=db[h.objectID]||{title:h.title,price:Math.round(reg*100),url:r.origin+(h.url||''),filters:[]};
-        if(!cur.filters.includes(tag)) cur.filters.push(tag);
-        db[h.objectID]=cur;
-      }
-    }
-    if(seen.size>=total) break;
-  }
-  if(seen.size<total) console.warn(`window [${lo},${hi}) ${tag}: recovered ${seen.size}/${total} titles`);
 }
 
 async function harvest(r,facet,tag,db,onProg){
@@ -292,8 +267,11 @@ async function harvest(r,facet,tag,db,onProg){
     let hi=Math.min(lo+2,r.maxPrice+EPS);
     let c=await count(r,lo,hi,facet);
     while(c>=CAP && (hi-lo)>0.005){ hi=lo+(hi-lo)/2; c=await count(r,lo,hi,facet); }
-    if(c>=CAP){ await harvestCollision(r,facet,tag,db,lo,hi,c); }
-    else{ await fetchWindow(r,facetOf(r,facet),lo,hi,db,tag); }
+    // At the halving floor (~0.005 wide) a window holds essentially one price
+    // point, so if it's still oversaturated a small hitsPerPage already gets
+    // us our sample — no need to keep querying for the rest.
+    const hitsPerPage=c>=CAP?PER_PRICE_CAP*3:1000;
+    await fetchWindow(r,facetOf(r,facet),lo,hi,db,tag,hitsPerPage);
     lo=hi;
     if(onProg) onProg(Math.min(lo,r.maxPrice));
   }
