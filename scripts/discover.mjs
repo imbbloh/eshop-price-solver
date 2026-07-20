@@ -1,5 +1,6 @@
-// TEMPORARY: enumerate topLevelFilters facet values (+counts) for the new regions,
-// and probe the actual max price and windowing density so we can pick sane region caps.
+// TEMPORARY: check density at common decimal price points to validate the
+// adaptive price-windowing algorithm won't silently truncate results (Algolia
+// caps any single query at 1000 hits; windowing halves down to 0.005 resolution).
 const appId = 'U3B6GR4UA3', apiKey = 'a29c6927638bfd8cee23993e51e721c9';
 async function query(index, body) {
   const res = await fetch(`https://${appId}-dsn.algolia.net/1/indexes/${index}/query`, {
@@ -15,19 +16,18 @@ async function main() {
     ca: 'store_game_en_ca_price_asc',
     mx: 'store_game_es_mx_price_asc',
   };
+  const usdPoints = [0.99,1.99,2.99,3.99,4.99,5.99,6.99,7.99,9.99,12.99,14.99,19.99,24.99,29.99,39.99,49.99,59.99];
+  const mxnPoints = [9.99,19.99,29.99,39.99,49.99,69.99,99.99,129.99,149.99,199.99,249.99,299.99,349.99,399.99,499.99,599.99,699.99,799.99,899.99,999.99];
   for (const [region, index] of Object.entries(indexes)) {
-    console.log(`\n=== ${region} (${index}) ===`);
-    const j = await query(index, { hitsPerPage: 0, facets: ['topLevelFilters'], numericFilters: ['price.regPrice>0'] });
-    console.log('nbHits (price>0):', j.nbHits);
-    console.log('facets:', JSON.stringify(j.facets, null, 2));
-    // price distribution sample: count under various caps
-    for (const cap of [10, 20, 30, 40, 60, 80]) {
-      const c = await query(index, { hitsPerPage: 0, numericFilters: [`price.regPrice>0`, `price.regPrice<=${cap}`] });
-      console.log(`  games with 0 < price <= ${cap}: ${c.nbHits}`);
+    const points = region === 'mx' ? mxnPoints : usdPoints;
+    console.log(`\n=== ${region} density at common price points ===`);
+    let worst = 0, worstP = null;
+    for (const p of points) {
+      const c = await query(index, { hitsPerPage: 0, numericFilters: [`price.regPrice>=${p-0.001}`, `price.regPrice<=${p+0.001}`] });
+      if (c.nbHits > 50) console.log(`  ${p}: ${c.nbHits}`);
+      if (c.nbHits > worst) { worst = c.nbHits; worstP = p; }
     }
-    // densest price point check within a plausible cap (windowing safety, cap=60)
-    const dense = await query(index, { hitsPerPage: 0, numericFilters: ['price.regPrice>=0','price.regPrice<2'] });
-    console.log('  count in [0,2):', dense.nbHits);
+    console.log(`  WORST: ${worstP} -> ${worst} hits`);
   }
 }
 main().catch(e => { console.error(e); process.exit(1); });
