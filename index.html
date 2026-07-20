@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Nintendo Brazil — Price Solver</title>
+<style>
+  :root{
+    --red:#e60012; --red-dark:#ff2d3f;
+    --bg:#0e1013; --card:#171a20; --card2:#1f232b; --line:#2b303a;
+    --ink:#e9edf3; --muted:#97a1af;
+    --link:#6ea8ff; --green:#39c07b;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font:16px/1.55 -apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif}
+  header{background:var(--red);color:#fff;box-shadow:0 2px 14px rgba(0,0,0,.4)}
+  .head-in{max-width:760px;margin:0 auto;padding:16px 18px;display:flex;align-items:center;gap:12px}
+  .logo{width:30px;height:30px;border-radius:8px;background:#fff;position:relative;flex:none}
+  .logo:before{content:"";position:absolute;inset:6px;border-radius:50%;border:3px solid var(--red)}
+  .head-in h1{margin:0;font-size:20px;font-weight:800;letter-spacing:-.2px}
+  .wrap{max-width:760px;margin:0 auto;padding:18px;display:grid;gap:16px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:18px}
+  label{display:block;font-size:13px;font-weight:600;color:var(--muted);margin:0 0 6px}
+  input,select,textarea,button{font:inherit;color:var(--ink);background:var(--card2);
+        border:1.5px solid var(--line);border-radius:12px;padding:12px 14px}
+  input,select,textarea{width:100%}
+  input:focus,select:focus{outline:none;border-color:var(--red)}
+  textarea{min-height:88px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px}
+  button{cursor:pointer;background:var(--red);border-color:var(--red);color:#fff;font-weight:700;transition:.15s}
+  button:hover{background:var(--red-dark);border-color:var(--red-dark)}
+  button.ghost{background:var(--card2);color:var(--ink);border-color:var(--line);font-weight:600}
+  button.ghost:hover{background:#262b34}
+  button:disabled{opacity:.45;cursor:default}
+  .btn-xl{width:100%;padding:18px;font-size:19px;border-radius:14px;box-shadow:0 4px 16px rgba(230,0,18,.3)}
+  .row{display:flex;gap:12px;flex-wrap:wrap;align-items:end}
+  .row>*{flex:1;min-width:130px}
+  .bar{height:8px;background:var(--card2);border-radius:6px;overflow:hidden;margin-top:12px}
+  .bar>i{display:block;height:100%;width:0;background:var(--red);transition:width .2s}
+  .muted{color:var(--muted)}.warn{color:#e0b13a}.err{color:#ff6b6b}.ok{color:var(--green)}
+  #dstatus,#status{min-height:20px;font-size:13.5px;margin-top:10px}
+  details summary{cursor:pointer;color:var(--muted);font-size:13px;font-weight:600}
+
+  /* result cards */
+  .sol{border:1px solid var(--line);border-radius:14px;margin:0 0 14px;overflow:hidden;background:var(--card)}
+  .sol .top{display:flex;justify-content:space-between;align-items:center;
+            padding:11px 16px;background:var(--card2);border-bottom:1px solid var(--line)}
+  .sol .top .n{color:var(--muted);font-weight:600;font-size:14px}
+  .sol .top .grand{font-size:19px;font-weight:800;color:var(--green)}
+  .sol table{width:100%;border-collapse:collapse}
+  .sol td{padding:11px 16px;border-top:1px solid var(--line)}
+  .sol tbody tr:first-child td{border-top:none}
+  .sol td.p{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
+  .sol tfoot td{background:var(--card2);font-weight:800;border-top:2px solid var(--line)}
+  .sol tfoot td.p{color:var(--green)}
+  a{color:var(--link);text-decoration:none;font-weight:600}
+  a:hover{text-decoration:underline}
+  #moreBtn{width:100%;padding:13px;border-radius:12px}
+</style>
+</head>
+<body>
+<header><div class="head-in"><span class="logo"></span><h1>Nintendo Brazil — Price Solver</h1></div></header>
+
+<div class="wrap">
+
+  <div class="card">
+    <div id="dataState" class="muted" style="margin-bottom:12px">Checking for saved data…</div>
+    <button id="fetchBtn" class="btn-xl">Update games from Nintendo Store</button>
+    <div class="bar"><i id="bar"></i></div>
+    <div id="dstatus" class="muted"></div>
+    <div style="margin-top:8px"><button id="cancelBtn" class="ghost" disabled style="padding:7px 14px">Stop</button></div>
+
+    <details style="margin-top:14px">
+      <summary>Import / export &amp; offline copy</summary>
+      <div style="margin-top:12px">
+        <label>Load a JSON file</label>
+        <input type="file" id="file" accept="application/json,.json">
+        <label style="margin-top:10px">…or paste JSON</label>
+        <textarea id="paste" placeholder='{"games":[{"title":"...","price":4.99,"url":"...","filters":["base"]}]}'></textarea>
+        <div class="row" style="margin-top:10px">
+          <button id="loadPaste" class="ghost">Load pasted</button>
+          <button id="bake" class="ghost">Download page + data</button>
+          <button id="dl" class="ghost">Export JSON</button>
+          <button id="clearData" class="ghost">Clear</button>
+        </div>
+        <div id="dataErr" class="err"></div>
+      </div>
+    </details>
+  </div>
+
+  <div class="card">
+    <div class="row" style="margin-bottom:16px">
+      <div style="flex:2">
+        <label>Target value (R$)</label>
+        <input id="target" value="5.05" inputmode="decimal">
+      </div>
+      <div>
+        <label>Filter</label>
+        <select id="tag"><option value="">all</option></select>
+      </div>
+    </div>
+    <button id="solve" class="btn-xl">Solve</button>
+    <div style="margin-top:8px"><button id="stop" class="ghost" disabled style="padding:7px 14px">Stop</button></div>
+    <div id="status" class="muted"></div>
+  </div>
+
+  <div id="results" class="card"><span class="muted">Enter a target and tap Solve.</span></div>
+
+</div>
+
+<script>
+/* ============================ config ============================ */
+const MAX_PRICE=30, ORIGIN='https://www.nintendo.com', CAP=980, EPS=0.0001;
+const ALGOLIA={appId:'U3B6GR4UA3',apiKey:'a29c6927638bfd8cee23993e51e721c9',index:'store_game_pt_br_price_asc'};
+const ENDPOINT=`https://${ALGOLIA.appId}-dsn.algolia.net/1/indexes/${ALGOLIA.index}/query`;
+const FILTERS=[
+  {tag:'base',facet:null},
+  {tag:'conteudo_extra',facet:'Conteúdo extra'},
+  {tag:'jogo_com_conteudo',facet:'Jogo com conteúdo extra'},
+  {tag:'pacote_melhoria',facet:'Pacote de melhoria'},
+  {tag:'promocoes',facet:'Promoções'},
+  {tag:'versao_demo',facet:'Versão demo disponível'},
+];
+const STORE_KEY='nintendoPriceTool_v2';
+const WANT=5, MAX_LEN=15;
+
+/* ============================ state ============================ */
+let GAMES=[];
+let CANCEL_FETCH=false, CANCEL_SOLVE=false;
+const $=s=>document.querySelector(s);
+const toCents=v=>Math.round(parseFloat(String(v).replace(/\s/g,'').replace(',','.'))*100);
+const fmt=c=>'R$ '+(c/100).toFixed(2);
+
+/* ==================== scraping (in-browser) ==================== */
+async function query(body){
+  const r=await fetch(ENDPOINT,{method:'POST',headers:{'x-algolia-api-key':ALGOLIA.apiKey,'x-algolia-application-id':ALGOLIA.appId,'content-type':'application/x-www-form-urlencoded'},body:JSON.stringify(body)});
+  if(!r.ok) throw new Error('Store API HTTP '+r.status+' — the search key may have changed.');
+  return r.json();
+}
+const rangeNF=(lo,hi)=>['price.regPrice>='+lo,'price.regPrice<'+hi];
+const facetOf=f=>f?'topLevelFilters:"'+f+'"':undefined;
+async function count(lo,hi,f){return (await query({numericFilters:rangeNF(lo,hi),filters:facetOf(f),hitsPerPage:0})).nbHits;}
+
+async function harvest(facet,tag,db,onProg){
+  let lo=0;
+  while(lo<=MAX_PRICE){
+    if(CANCEL_FETCH) throw new Error('cancelled');
+    let hi=Math.min(lo+2,MAX_PRICE+EPS);
+    let c=await count(lo,hi,facet);
+    while(c>=CAP && (hi-lo)>0.005){ hi=lo+(hi-lo)/2; c=await count(lo,hi,facet); }
+    const j=await query({numericFilters:rangeNF(lo,hi),filters:facetOf(facet),hitsPerPage:1000,page:0,attributesToRetrieve:['title','url','price','objectID']});
+    for(const h of j.hits){
+      const reg=h.price?h.price.regPrice:null;
+      if(h.objectID==null||reg==null||reg<=0||reg>MAX_PRICE) continue;
+      const cur=db[h.objectID]||{title:h.title,price:Math.round(reg*100),url:ORIGIN+(h.url||''),filters:[]};
+      if(!cur.filters.includes(tag)) cur.filters.push(tag);
+      db[h.objectID]=cur;
+    }
+    lo=hi;
+    if(onProg) onProg(Math.min(lo,MAX_PRICE));
+  }
+}
+
+async function fetchAll(){
+  CANCEL_FETCH=false;
+  $('#fetchBtn').disabled=true; $('#cancelBtn').disabled=false;
+  const db={};
+  try{
+    for(let i=0;i<FILTERS.length;i++){
+      const f=FILTERS[i];
+      await harvest(f.facet,f.tag,db,(p)=>{
+        const frac=(i+p/MAX_PRICE)/FILTERS.length;
+        $('#bar').style.width=(frac*100).toFixed(1)+'%';
+        $('#dstatus').innerHTML=`Fetching <b>${f.facet||'all games'}</b> … R$ ${p.toFixed(2)} · ${Object.keys(db).length} games`;
+      });
+    }
+    GAMES=Object.values(db).map(g=>({title:g.title,price:g.price,url:g.url,filters:g.filters}));
+    persist(); refreshUI();
+    $('#bar').style.width='100%';
+    $('#dstatus').innerHTML=`<span class="ok">✓ Updated: ${GAMES.length} games saved.</span>`;
+  }catch(e){
+    $('#dstatus').innerHTML = e.message==='cancelled'
+      ? '<span class="warn">Stopped. Kept previously saved data.</span>'
+      : '<span class="err">'+e.message+'</span>';
+  }
+  $('#fetchBtn').disabled=false; $('#cancelBtn').disabled=true;
+}
+
+/* ==================== persistence ==================== */
+function persist(){ try{ localStorage.setItem(STORE_KEY, JSON.stringify({savedAt:Date.now(), games:GAMES.map(g=>({...g,price:g.price/100}))})); }catch(e){} }
+function refreshUI(){
+  const tags=new Set(); GAMES.forEach(g=>(g.filters||[]).forEach(t=>tags.add(t)));
+  const sel=$('#tag'); const prev=sel.value;
+  sel.innerHTML='<option value="">all</option>'+[...tags].sort().map(t=>`<option>${t}</option>`).join('');
+  sel.value=prev;
+}
+function setDataState(savedAt){
+  if(!GAMES.length){ $('#dataState').innerHTML='No data yet — tap below to fetch (~30–60s).'; return; }
+  const when=savedAt?new Date(savedAt).toLocaleDateString():'this session';
+  $('#dataState').innerHTML=`<span class="ok">●</span> <b>${GAMES.length}</b> games loaded · updated ${when}`;
+}
+function ingest(payload,{persistIt=true}={}){
+  $('#dataErr').textContent='';
+  let o; try{ o=typeof payload==='string'?JSON.parse(payload):payload; }catch(e){ $('#dataErr').textContent='Invalid JSON: '+e.message; return false; }
+  const arr=Array.isArray(o)?o:(o.games||o.data||[]); const clean=[]; const seen=new Set();
+  arr.forEach(g=>{
+    const price=typeof g.price==='number'?Math.round(g.price*100):toCents(g.price);
+    if(!g.title||!isFinite(price)||price<=0||price>MAX_PRICE*100) return;
+    const k=(g.url||'')+'|'+g.title; if(seen.has(k)) return; seen.add(k);
+    clean.push({title:String(g.title).trim(),price,url:g.url||'#',filters:g.filters||[]});
+  });
+  GAMES=clean; if(persistIt) persist(); refreshUI(); setDataState(Date.now());
+  return true;
+}
+function exportObj(){ return {savedAt:Date.now(),maxPrice:MAX_PRICE,currency:'BRL',priceBasis:'original',count:GAMES.length,games:GAMES.map(g=>({...g,price:g.price/100}))}; }
+
+/* ==================== restore on load ==================== */
+(function restore(){
+  if(window.__EMBEDDED_DATA){ ingest(window.__EMBEDDED_DATA,{persistIt:false}); return; }
+  try{ const s=localStorage.getItem(STORE_KEY); if(s){ const o=JSON.parse(s); ingest(o,{persistIt:false}); setDataState(o.savedAt); return; } }catch(e){}
+  setDataState(null);
+})();
+
+/* ==================== wiring (data) ==================== */
+$('#fetchBtn').onclick=fetchAll;
+$('#cancelBtn').onclick=()=>{CANCEL_FETCH=true;};
+$('#file').addEventListener('change',e=>{const f=e.target.files[0];if(!f)return;const r=new FileReader();r.onload=()=>ingest(r.result);r.readAsText(f);});
+$('#loadPaste').onclick=()=>ingest($('#paste').value);
+$('#clearData').onclick=()=>{try{localStorage.removeItem(STORE_KEY);}catch(e){} GAMES=[];refreshUI();setDataState(null);$('#dstatus').textContent='Data cleared.';};
+$('#dl').onclick=()=>{const b=new Blob([JSON.stringify(exportObj(),null,2)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='nintendo-br-games.json';document.body.appendChild(a);a.click();a.remove();};
+$('#bake').onclick=()=>{
+  if(!GAMES.length){$('#dataErr').textContent='No data to bake in yet.';return;}
+  const data=JSON.stringify(exportObj());
+  let html=document.documentElement.outerHTML.replace(/<script id="__EMBED">[\s\S]*?<\/script>/,'');
+  html='<!DOCTYPE html>\n'+html.replace('</head>',`<script id="__EMBED">window.__EMBEDDED_DATA=${data};<\/script></head>`);
+  const b=new Blob([html],{type:'text/html'});const a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='nintendo-price-solver-with-data.html';document.body.appendChild(a);a.click();a.remove();
+};
+
+/* ============================ solver ============================ */
+function solve(){
+  if(!GAMES.length){ $('#status').innerHTML='<span class="err">No data — update games first.</span>'; return; }
+  const target=toCents($('#target').value); const tag=$('#tag').value;
+  if(!isFinite(target)||target<=0){ $('#status').innerHTML='<span class="err">Invalid target.</span>'; return; }
+
+  const pool=GAMES.filter(g=>(!tag||(g.filters||[]).includes(tag))&&g.price<=target).sort((a,b)=>a.price-b.price);
+  const pre=[0]; for(let i=0;i<pool.length;i++) pre.push(pre[i]+pool[i].price);
+  const results=[]; let nodes=0; const BUDGET=30_000_000; CANCEL_SOLVE=false;
+
+  function searchLen(L){
+    const path=[];
+    (function dfs(i,sum,r){
+      if(results.length>=WANT||nodes>BUDGET||CANCEL_SOLVE) return;
+      if(r===0){ if(sum===target) results.push(path.slice()); return; }
+      for(let k=i;k+r<=pool.length;k++){
+        nodes++;
+        const minSum=sum+(pre[k+r]-pre[k]);
+        if(minSum>target) break;
+        path.push(pool[k]); dfs(k+1,sum+pool[k].price,r-1); path.pop();
+        if(results.length>=WANT) return;
+      }
+    })(0,0,L);
+  }
+
+  $('#status').textContent='Searching…'; $('#stop').disabled=false;
+  setTimeout(()=>{
+    const t0=performance.now();
+    for(let L=1; L<=MAX_LEN && results.length<WANT && nodes<=BUDGET && !CANCEL_SOLVE; L++) searchLen(L);
+    const ms=Math.round(performance.now()-t0);
+    render(results);
+    $('#status').innerHTML = results.length
+      ? `Found ${results.length} combination${results.length>1?'s':''} in ${ms} ms.`
+      : `No exact match in ${ms} ms — try another target or filter.`;
+    $('#stop').disabled=true;
+  },20);
+}
+$('#solve').onclick=solve;
+$('#stop').onclick=()=>{CANCEL_SOLVE=true;};
+
+function render(sols){
+  const box=$('#results');
+  if(!sols.length){ box.innerHTML='<span class="err">No combination adds up exactly to the target. Try another target or filter.</span>'; return; }
+  const card=(s)=>{
+    const sum=s.reduce((a,g)=>a+g.price,0);
+    const rows=s.map(g=>`<tr><td><a href="${g.url}" target="_blank" rel="noopener">${esc(g.title)}</a></td><td class="p">${fmt(g.price)}</td></tr>`).join('');
+    return `<div class="sol">
+      <div class="top"><span class="n">${s.length} game${s.length>1?'s':''}</span></div>
+      <table>
+        <tbody>${rows}</tbody>
+        <tfoot><tr><td>Total</td><td class="p">${fmt(sum)}</td></tr></tfoot>
+      </table>
+    </div>`;
+  };
+  box.innerHTML =
+    card(sols[0]) +
+    `<div id="more" style="display:none">${sols.slice(1).map(card).join('')}</div>` +
+    (sols.length>1 ? `<button id="moreBtn" class="ghost">Show ${sols.length-1} more combination${sols.length-1>1?'s':''}</button>` : '');
+  const mb=$('#moreBtn');
+  if(mb) mb.onclick=()=>{ $('#more').style.display='block'; mb.style.display='none'; };
+}
+function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+</script>
+</body>
+</html>
