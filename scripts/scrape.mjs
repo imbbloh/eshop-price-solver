@@ -3,11 +3,16 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 
 const CAP = 980, EPS = 0.0001;
-// Fallback facet used to split a price window when too many titles share the
+// Fallback facets used to split a price window when too many titles share the
 // same (or near-identical) price for a single Algolia query to return (see
 // harvestCollision below) — US/CA in particular have far denser catalogs than
-// BR and routinely blow past this at common price points like $4.99.
-const SPLIT_ATTR = 'softwareDeveloper';
+// BR and routinely blow past this at common price points like $4.99. Tried in
+// order; softwareDeveloper alone is NOT enough — a single $4.99 window can
+// have 1000+ distinct developers (mostly one-off indie/shovelware titles),
+// which exceeds Algolia's maxValuesPerFacet:1000 and silently truncates the
+// facet enumeration itself. softwarePublisher is far more concentrated (a
+// handful of publishing labels cover most titles) so it's tried first.
+const SPLIT_ATTRS = ['softwarePublisher', 'softwareDeveloper'];
 
 const REGIONS = {
   br: {
@@ -118,23 +123,37 @@ async function fetchWindow(r, filters, lo, hi, db, tag) {
 // Called when a price window can't be narrowed any further (hi-lo already at
 // the halving floor) yet still matches >= CAP titles — i.e. more titles share
 // that price than a single Algolia query can return (hard cap: 1000/query).
-// Split by developer instead: it's fine-grained enough that no single
-// developer's catalog comes anywhere near the cap.
+// Try splitting by each attribute in SPLIT_ATTRS (each independently, unioned
+// by objectID) until every valid title in the window has been recovered.
 async function harvestCollision(r, facet, tag, db, lo, hi, total) {
   const base = facetOf(r, facet);
-  const fj = await query(r, {
-    numericFilters: rangeNF(r, lo, hi), filters: base,
-    hitsPerPage: 0, facets: [SPLIT_ATTR], maxValuesPerFacet: 1000,
-  });
-  const values = Object.keys((fj.facets && fj.facets[SPLIT_ATTR]) || {});
-  let got = 0;
-  for (const v of values) {
-    const esc = v.replace(/"/g, '\\"');
-    const filters = base ? `${base} AND ${SPLIT_ATTR}:"${esc}"` : `${SPLIT_ATTR}:"${esc}"`;
-    got += await fetchWindow(r, filters, lo, hi, db, tag);
+  const seen = new Set();
+  for (const attr of SPLIT_ATTRS) {
+    const fj = await query(r, {
+      numericFilters: rangeNF(r, lo, hi), filters: base,
+      hitsPerPage: 0, facets: [attr], maxValuesPerFacet: 1000,
+    });
+    const values = Object.keys((fj.facets && fj.facets[attr]) || {});
+    for (const v of values) {
+      const esc = v.replace(/"/g, '\\"');
+      const filters = base ? `${base} AND ${attr}:"${esc}"` : `${attr}:"${esc}"`;
+      const j = await query(r, {
+        numericFilters: rangeNF(r, lo, hi), filters,
+        hitsPerPage: 1000, page: 0, attributesToRetrieve: ['title', 'url', 'price', 'objectID'],
+      });
+      for (const h of j.hits) {
+        const reg = r.getPrice(h);
+        if (h.objectID == null || reg == null || reg <= 0 || reg > r.maxPrice) continue;
+        seen.add(h.objectID);
+        const cur = db[h.objectID] || { title: h.title, price: reg, url: r.origin + (h.url || ''), filters: [] };
+        if (!cur.filters.includes(tag)) cur.filters.push(tag);
+        db[h.objectID] = cur;
+      }
+    }
+    if (seen.size >= total) break;
   }
-  if (got < total) {
-    console.warn(`  ! [${lo.toFixed(3)},${hi.toFixed(3)}) ${tag}: recovered ${got}/${total} (some titles may lack a ${SPLIT_ATTR} value)`);
+  if (seen.size < total) {
+    console.warn(`  ! [${lo.toFixed(3)},${hi.toFixed(3)}) ${tag}: recovered ${seen.size}/${total} (remainder likely priced <= 0, or lacks ${SPLIT_ATTRS.join('/')})`);
   }
 }
 
