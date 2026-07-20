@@ -217,10 +217,13 @@ const REGIONS = {
   },
 };
 const CAP=980, EPS=0.0001, WANT=5, MAX_LEN=15;
-// Fallback facet to split a price window when more titles share that price
+// Fallback facets to split a price window when more titles share that price
 // than a single Algolia query can return (hard cap: 1000/query) — see
-// harvestCollision below.
-const SPLIT_ATTR='softwareDeveloper';
+// harvestCollision below. softwareDeveloper alone isn't enough: a single
+// $4.99 window can have 1000+ distinct developers, exceeding Algolia's
+// maxValuesPerFacet:1000 and truncating the facet enumeration itself.
+// softwarePublisher is far more concentrated, so it's tried first.
+const SPLIT_ATTRS=['softwarePublisher','softwareDeveloper'];
 
 /* ============================ state ============================ */
 let current='br';
@@ -255,20 +258,31 @@ async function fetchWindow(r,filters,lo,hi,db,tag){
 }
 // Called when a price window can't be narrowed any further yet still matches
 // >= CAP titles (more titles share that price than one query can return).
-// Split by developer instead — fine-grained enough that no single developer's
-// catalog comes anywhere near the cap.
+// Try splitting by each attribute in SPLIT_ATTRS (each independently, unioned
+// by objectID) until every valid title in the window has been recovered.
 async function harvestCollision(r,facet,tag,db,lo,hi,total){
   const base=facetOf(r,facet);
-  const fj=await query(r,{numericFilters:rangeNF(r,lo,hi),filters:base,hitsPerPage:0,facets:[SPLIT_ATTR],maxValuesPerFacet:1000});
-  const values=Object.keys((fj.facets&&fj.facets[SPLIT_ATTR])||{});
-  let got=0;
-  for(const v of values){
-    if(CANCEL_FETCH) throw new Error('cancelled');
-    const esc=v.replace(/"/g,'\\"');
-    const filters=base?`${base} AND ${SPLIT_ATTR}:"${esc}"`:`${SPLIT_ATTR}:"${esc}"`;
-    got+=await fetchWindow(r,filters,lo,hi,db,tag);
+  const seen=new Set();
+  for(const attr of SPLIT_ATTRS){
+    const fj=await query(r,{numericFilters:rangeNF(r,lo,hi),filters:base,hitsPerPage:0,facets:[attr],maxValuesPerFacet:1000});
+    const values=Object.keys((fj.facets&&fj.facets[attr])||{});
+    for(const v of values){
+      if(CANCEL_FETCH) throw new Error('cancelled');
+      const esc=v.replace(/"/g,'\\"');
+      const filters=base?`${base} AND ${attr}:"${esc}"`:`${attr}:"${esc}"`;
+      const j=await query(r,{numericFilters:rangeNF(r,lo,hi),filters,hitsPerPage:1000,page:0,attributesToRetrieve:['title','url','price','objectID']});
+      for(const h of j.hits){
+        const reg=r.getPrice(h);
+        if(h.objectID==null||reg==null||reg<=0||reg>r.maxPrice) continue;
+        seen.add(h.objectID);
+        const cur=db[h.objectID]||{title:h.title,price:Math.round(reg*100),url:r.origin+(h.url||''),filters:[]};
+        if(!cur.filters.includes(tag)) cur.filters.push(tag);
+        db[h.objectID]=cur;
+      }
+    }
+    if(seen.size>=total) break;
   }
-  if(got<total) console.warn(`window [${lo},${hi}) ${tag}: recovered ${got}/${total} titles`);
+  if(seen.size<total) console.warn(`window [${lo},${hi}) ${tag}: recovered ${seen.size}/${total} titles`);
 }
 
 async function harvest(r,facet,tag,db,onProg){
