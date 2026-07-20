@@ -244,23 +244,28 @@ const rangeNF=(r,lo,hi)=>[r.priceKey+'>='+lo,r.priceKey+'<'+hi];
 const facetOf=(r,f)=>f?r.facetKey+':"'+f+'"':undefined;
 async function count(r,lo,hi,f){return (await query(r,{numericFilters:rangeNF(r,lo,hi),filters:facetOf(r,f),hitsPerPage:0})).nbHits;}
 
-async function fetchWindow(r,filters,lo,hi,db,tag,hitsPerPage){
+async function fetchWindow(r,filters,lo,hi,db,tag,hitsPerPage,perPrice){
   const j=await query(r,{numericFilters:rangeNF(r,lo,hi),filters,hitsPerPage,page:0,attributesToRetrieve:['title','url','price','objectID']});
-  const perPrice={};
   for(const h of j.hits){
     const reg=r.getPrice(h);
     if(h.objectID==null||reg==null||reg<=0||reg>r.maxPrice) continue;
+    const existing=db[h.objectID];
+    if(existing){
+      if(!existing.filters.includes(tag)) existing.filters.push(tag);
+      continue;
+    }
+    // Only titles new to this region's db count against the per-price cap —
+    // it caps distinct games per price across all filter passes, not per pass.
     const key=reg.toFixed(2);
-    perPrice[key]=(perPrice[key]||0)+1;
-    if(perPrice[key]>PER_PRICE_CAP) continue;
-    const cur=db[h.objectID]||{title:h.title,price:Math.round(reg*100),url:r.origin+(h.url||''),filters:[]};
-    if(!cur.filters.includes(tag)) cur.filters.push(tag);
-    db[h.objectID]=cur;
+    const seenAtPrice=perPrice[key]||0;
+    if(seenAtPrice>=PER_PRICE_CAP) continue;
+    perPrice[key]=seenAtPrice+1;
+    db[h.objectID]={title:h.title,price:Math.round(reg*100),url:r.origin+(h.url||''),filters:[tag]};
   }
   return j.hits.length;
 }
 
-async function harvest(r,facet,tag,db,onProg){
+async function harvest(r,facet,tag,db,perPrice,onProg){
   let lo=0;
   while(lo<=r.maxPrice){
     if(CANCEL_FETCH) throw new Error('cancelled');
@@ -271,7 +276,7 @@ async function harvest(r,facet,tag,db,onProg){
     // point, so if it's still oversaturated a small hitsPerPage already gets
     // us our sample — no need to keep querying for the rest.
     const hitsPerPage=c>=CAP?PER_PRICE_CAP*3:1000;
-    await fetchWindow(r,facetOf(r,facet),lo,hi,db,tag,hitsPerPage);
+    await fetchWindow(r,facetOf(r,facet),lo,hi,db,tag,hitsPerPage,perPrice);
     lo=hi;
     if(onProg) onProg(Math.min(lo,r.maxPrice));
   }
@@ -282,10 +287,11 @@ async function fetchAll(){
   CANCEL_FETCH=false;
   $('#fetchBtn').disabled=true; $('#cancelBtn').disabled=false;
   const db={};
+  const perPrice={}; // shared across all filter passes so the cap is per-region, not per-pass
   try{
     for(let i=0;i<r.filters.length;i++){
       const f=r.filters[i];
-      await harvest(r,f.facet,f.tag,db,(p)=>{
+      await harvest(r,f.facet,f.tag,db,perPrice,(p)=>{
         const frac=(i+p/r.maxPrice)/r.filters.length;
         $('#bar').style.width=(frac*100).toFixed(1)+'%';
         $('#dstatus').innerHTML=`Fetching <b>${f.facet||'all games'}</b> … ${r.currency}${p.toFixed(2)} · ${Object.keys(db).length} games`;

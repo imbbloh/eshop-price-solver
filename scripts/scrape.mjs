@@ -102,26 +102,31 @@ const facetOf = (r, f) => (f ? `${r.facetKey}:"${f}"` : undefined);
 const count = async (r, lo, hi, f) =>
   (await query(r, { numericFilters: rangeNF(r, lo, hi), filters: facetOf(r, f), hitsPerPage: 0 })).nbHits;
 
-async function fetchWindow(r, filters, lo, hi, db, tag, hitsPerPage) {
+async function fetchWindow(r, filters, lo, hi, db, tag, hitsPerPage, perPrice) {
   const j = await query(r, {
     numericFilters: rangeNF(r, lo, hi), filters,
     hitsPerPage, page: 0, attributesToRetrieve: ['title', 'url', 'price', 'objectID'],
   });
-  const perPrice = {};
   for (const h of j.hits) {
     const reg = r.getPrice(h);
     if (h.objectID == null || reg == null || reg <= 0 || reg > r.maxPrice) continue;
+    const existing = db[h.objectID];
+    if (existing) {
+      if (!existing.filters.includes(tag)) existing.filters.push(tag);
+      continue;
+    }
+    // Only titles new to this region's db count against the per-price cap —
+    // it caps distinct games per price across the whole region, not per pass.
     const key = reg.toFixed(2);
-    perPrice[key] = (perPrice[key] || 0) + 1;
-    if (perPrice[key] > PER_PRICE_CAP) continue;
-    const cur = db[h.objectID] || { title: h.title, price: reg, url: r.origin + (h.url || ''), filters: [] };
-    if (!cur.filters.includes(tag)) cur.filters.push(tag);
-    db[h.objectID] = cur;
+    const seenAtPrice = perPrice[key] || 0;
+    if (seenAtPrice >= PER_PRICE_CAP) continue;
+    perPrice[key] = seenAtPrice + 1;
+    db[h.objectID] = { title: h.title, price: reg, url: r.origin + (h.url || ''), filters: [tag] };
   }
   return j.hits.length;
 }
 
-async function harvest(r, facet, tag, db) {
+async function harvest(r, facet, tag, db, perPrice) {
   let lo = 0;
   while (lo <= r.maxPrice) {
     let hi = Math.min(lo + 2, r.maxPrice + EPS);
@@ -131,7 +136,7 @@ async function harvest(r, facet, tag, db) {
     // essentially one price point, so if it's still oversaturated there's no
     // need to keep querying — a small hitsPerPage already gets us our sample.
     const hitsPerPage = c >= CAP ? PER_PRICE_CAP * 3 : 1000;
-    await fetchWindow(r, facetOf(r, facet), lo, hi, db, tag, hitsPerPage);
+    await fetchWindow(r, facetOf(r, facet), lo, hi, db, tag, hitsPerPage, perPrice);
     lo = hi;
   }
 }
@@ -139,8 +144,9 @@ async function harvest(r, facet, tag, db) {
 async function scrapeRegion(region) {
   const r = REGIONS[region];
   const db = {};
+  const perPrice = {}; // shared across all filter passes so the cap is per-region, not per-pass
   for (const f of r.filters) {
-    await harvest(r, f.facet, f.tag, db);
+    await harvest(r, f.facet, f.tag, db, perPrice);
     console.log(`  ${region}/${f.tag}: ${Object.keys(db).length} unique so far`);
   }
   const games = Object.values(db).sort((a, b) => a.price - b.price);
