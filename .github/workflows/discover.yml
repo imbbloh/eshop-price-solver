@@ -2,6 +2,9 @@ name: Discover region config (temporary)
 
 on:
   workflow_dispatch:
+  push:
+    branches: [claude/eshop-us-mexico-canada-4nxb5o]
+    paths: ['.github/workflows/discover.yml', 'scripts/discover.mjs']
 
 jobs:
   discover:
