@@ -1,0 +1,15 @@
+name: Discover titledb integration test (temp)
+on:
+  push:
+    branches: [claude/titledb-integration-test]
+
+jobs:
+  discover:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm install axios
+      - run: node scripts/discover-titledb-integration.mjs
