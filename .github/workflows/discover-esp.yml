@@ -1,0 +1,21 @@
+name: Discover eshop-prices.com structure (temporary)
+
+on:
+  push:
+    branches: [claude/eshop-prices-explore]
+    paths: ['.github/workflows/discover-esp.yml', 'scripts/discover-esp.mjs']
+
+jobs:
+  discover:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Run discovery
+        run: node scripts/discover-esp.mjs
