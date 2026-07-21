@@ -11,6 +11,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-      - run: npm install playwright@1.47.0
+      - run: npm install playwright playwright-extra puppeteer-extra-plugin-stealth
       - run: npx playwright install --with-deps chromium
-      - run: node scripts/discover-esp2.mjs
+      - run: node scripts/discover-esp3.mjs
