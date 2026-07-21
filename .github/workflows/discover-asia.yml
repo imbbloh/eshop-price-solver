@@ -1,0 +1,21 @@
+name: Discover Asia region config (temporary)
+
+on:
+  push:
+    branches: [claude/nsuid-asia-explore]
+    paths: ['.github/workflows/discover-asia.yml', 'scripts/discover-asia.mjs']
+
+jobs:
+  discover:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Run discovery
+        run: node scripts/discover-asia.mjs
