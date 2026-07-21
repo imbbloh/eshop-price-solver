@@ -1,0 +1,21 @@
+name: Discover Asia storefront platform (temporary)
+
+on:
+  push:
+    branches: [claude/asia-storefront-explore]
+    paths: ['.github/workflows/discover-asia2.yml', 'scripts/discover-asia2.mjs']
+
+jobs:
+  discover:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Run discovery
+        run: node scripts/discover-asia2.mjs
