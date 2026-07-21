@@ -5,28 +5,36 @@ const TITLEDB_BASE = 'https://raw.githubusercontent.com/blawar/titledb/master';
 const TITLEDB_REGIONS = { JP: 'JP.ja.json', HK: 'HK.zh.json' };
 const titledbCache = new Map();
 const TITLEDB_TTL = 24 * 60 * 60 * 1000;
+let titledbLoadChain = Promise.resolve();
 
 async function loadTitledb(region, emit) {
   const cached = titledbCache.get(region);
   if (cached && Date.now() - cached.time < TITLEDB_TTL) return cached.entries;
   const file = TITLEDB_REGIONS[region];
   if (!file) return [];
-  try {
-    emit(`titledb (${region}): fetching ${file}...`);
-    const res = await axios.get(`${TITLEDB_BASE}/${file}`, { timeout: 60000 });
-    const raw = res.data;
-    const entries = [];
-    for (const nsuid in raw) {
-      const name = raw[nsuid]?.name;
-      if (name) entries.push({ nsuid, name });
+  const task = titledbLoadChain.then(async () => {
+    const cached2 = titledbCache.get(region);
+    if (cached2 && Date.now() - cached2.time < TITLEDB_TTL) return cached2.entries;
+    try {
+      emit(`titledb (${region}): fetching ${file}...`);
+      const t0 = Date.now();
+      const res = await axios.get(`${TITLEDB_BASE}/${file}`, { timeout: 60000 });
+      const raw = res.data;
+      const entries = [];
+      for (const nsuid in raw) {
+        const name = raw[nsuid]?.name;
+        if (name) entries.push({ nsuid, name });
+      }
+      titledbCache.set(region, { entries, time: Date.now() });
+      emit(`titledb (${region}): ${entries.length} titles cached in ${Date.now()-t0}ms, RSS now ${(process.memoryUsage().rss/1024/1024).toFixed(0)}MB`);
+      return entries;
+    } catch (e) {
+      emit(`titledb (${region}): ${e.message.slice(0, 60)}`);
+      return [];
     }
-    titledbCache.set(region, { entries, time: Date.now() });
-    emit(`titledb (${region}): ${entries.length} titles cached`);
-    return entries;
-  } catch (e) {
-    emit(`titledb (${region}): ${e.message.slice(0, 60)}`);
-    return [];
-  }
+  });
+  titledbLoadChain = task.catch(() => {});
+  return task;
 }
 
 async function findNsuidsViaTitledb(region, searchName, emit) {
@@ -45,32 +53,24 @@ async function findNsuidsViaTitledb(region, searchName, emit) {
   return [best.nsuid];
 }
 
-async function testCase(name, searchTerm) {
-  console.log(`\n=== TEST: ${name} (search="${searchTerm}") ===`);
-  const jpIds = await findNsuidsViaTitledb('JP', searchTerm, console.log);
-  if (jpIds.length) {
-    const res = await axios.get(`https://api.ec.nintendo.com/v1/price?country=JP&lang=ja&ids=${jpIds[0]}`, { timeout: 20000 });
-    console.log('JP price check:', JSON.stringify(res.data));
-  }
-  const hkIds = await findNsuidsViaTitledb('HK', searchTerm, console.log);
-  if (hkIds.length) {
-    const res = await axios.get(`https://api.ec.nintendo.com/v1/price?country=HK&lang=zh&ids=${hkIds[0]}`, { timeout: 20000 });
-    console.log('HK price check:', JSON.stringify(res.data));
-  }
-}
-
 async function main() {
-  const memBefore = process.memoryUsage().rss / 1024 / 1024;
-  await testCase('EA Sports FC 26', 'EA Sports Fc 26');
-  console.log(`Memory after JP+HK load: ${(process.memoryUsage().rss/1024/1024).toFixed(0)}MB (was ${memBefore.toFixed(0)}MB)`);
+  console.log(`RSS before: ${(process.memoryUsage().rss/1024/1024).toFixed(0)}MB`);
+  // Simulate production: findHK() and findJP() both call this concurrently via Promise.all
+  const [jpIds, hkIds] = await Promise.all([
+    findNsuidsViaTitledb('JP', 'EA Sports Fc 26', console.log),
+    findNsuidsViaTitledb('HK', 'EA Sports Fc 26', console.log),
+  ]);
+  console.log(`Concurrent call result: JP=${jpIds}, HK=${hkIds}`);
+  console.log(`Peak RSS after concurrent load: ${(process.memoryUsage().rss/1024/1024).toFixed(0)}MB`);
 
-  // Additional sanity test: a game with a genuinely short/common title, to
-  // check for false positives on unrelated titles too.
-  await testCase('Zelda BOTW (translated JP title, expect weak/no match)', 'The Legend Of Zelda Breath Of The Wild');
+  if (global.gc) { global.gc(); console.log(`RSS after manual GC: ${(process.memoryUsage().rss/1024/1024).toFixed(0)}MB`); }
 
   const t0 = Date.now();
-  await findNsuidsViaTitledb('JP', 'EA Sports Fc 26', () => {});
-  console.log(`\nCached lookup took ${Date.now() - t0}ms`);
+  await Promise.all([
+    findNsuidsViaTitledb('JP', 'EA Sports Fc 26', () => {}),
+    findNsuidsViaTitledb('HK', 'EA Sports Fc 26', () => {}),
+  ]);
+  console.log(`Second (cached) concurrent call took ${Date.now() - t0}ms`);
 }
 
 main().catch(e => { console.error('FATAL', e); process.exit(1); });
