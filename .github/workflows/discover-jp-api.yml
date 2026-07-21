@@ -11,4 +11,4 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-      - run: node scripts/discover-jp-xml.mjs
+      - run: node scripts/discover-jp-full.mjs
